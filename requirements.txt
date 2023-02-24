@@ -1,0 +1,9 @@
+ds_ctcdecoder==0.9.3
+librosa==0.9.2
+matplotlib==3.5.0
+numpy==1.23.5
+torch==1.10.0+cu113
+torch_summary==1.4.5
+torchaudio==0.10.0+cu113
+torchsummary==1.5.1
+tqdm==4.62.3

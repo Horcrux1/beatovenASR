@@ -5,5 +5,5 @@ numpy
 torch
 torch_summary
 torchaudio
-torchsummar
+torchsummary
 tqdm

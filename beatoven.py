@@ -14,6 +14,8 @@ from torch import optim
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 from ds_ctcdecoder import Alphabet, ctc_beam_search_decoder, Scorer
+from torchaudio.functional import edit_distance as leven_dist
+from torchmetrics import WordErrorRate 
 
 class ResidualCNN(nn.Module):
     def __init__(self, in_channels, out_channels, kernel, n_feats):
@@ -102,6 +104,7 @@ def collate(data):
 def fit(model, epochs, train_data_loader, valid_data_loader):
     best_leven = 1000
     optimizer = optim.AdamW(model.parameters(), 5e-4)
+    wer = WordErrorRate()
     len_train = len(train_data_loader)
     loss_func = nn.CTCLoss(blank=len(classes)).to(dev)
     for i in range(1, epochs + 1):
@@ -111,9 +114,6 @@ def fit(model, epochs, train_data_loader, valid_data_loader):
         len_levenshtein = 0
         all_train_decoded = []
         all_train_actual = []
-        # for _batch in tqdm(train_data_loader,
-        #                    position=0, leave=True, file=sys.stdout,
-        #                    bar_format="{l_bar}%s{bar}%s{r_bar}" % (Fore.GREEN, Fore.RESET):
         for _batch in tqdm(train_data_loader,
                            position=0, leave=True):
             model.train()
@@ -129,11 +129,11 @@ def fit(model, epochs, train_data_loader, valid_data_loader):
                 with torch.no_grad():
                     decoded = model.beam_search_with_lm(spectrograms)
                     for j in range(0, len(decoded)):
-                        actual = num_to_str(labels.cpu().numpy()[j][:_batch.label_lengths[j]].tolist())
+                        actual = num_to_str(labels.cpu().numpy()[j][:label_lengths[j]].tolist())
                         all_train_decoded.append(decoded[j])
                         all_train_actual.append(actual)
-                        train_levenshtein += leven.distance(decoded[j], actual)
-                        len_levenshtein += _batch.label_lengths[j]
+                        train_levenshtein += leven_dist(decoded[j], actual)
+                        len_levenshtein += label_lengths[j]
 
             batch_n += 1
         # ============================================ VALIDATION ======================================
@@ -143,18 +143,16 @@ def fit(model, epochs, train_data_loader, valid_data_loader):
             target_lengths = 0
             all_valid_decoded = []
             all_valid_actual = []
-            for _batch in tqdm(valid_data_loader,
-                               position=0, leave=True, file=sys.stdout,
-                               bar_format="{l_bar}%s{bar}%s{r_bar}" % (Fore.BLUE, Fore.RESET)):
+            for _batch in tqdm(valid_data_loader, position=0, leave=True):
                 spectrograms, labels, \
                 input_lengths, label_lengths = _batch[0].to(dev), _batch[1].to(dev), _batch[2], _batch[3]
                 decoded = model.beam_search_with_lm(spectrograms)
                 for j in range(0, len(decoded)):
-                    actual = num_to_str(labels.cpu().numpy()[j][:_batch.label_lengths[j]].tolist())
+                    actual = num_to_str(labels.cpu().numpy()[j][:label_lengths[j]].tolist())
                     all_valid_decoded.append(decoded[j])
                     all_valid_actual.append(actual)
-                    val_levenshtein += leven.distance(decoded[j], actual)
-                    target_lengths += _batch.label_lengths[j]
+                    val_levenshtein += leven_dist(decoded[j], actual)
+                    target_lengths += label_lengths[j]
 
         print('Epoch {}: Training Levenshtein {} | Validation Levenshtein {} '
               '| Training WER {} | Validation WER {}'
@@ -180,6 +178,8 @@ if __name__ == "__main__":
     if not os.path.isdir(target_dir):
         os.makedirs(target_dir)
     train_dataset = torchaudio.datasets.LIBRISPEECH(target_dir, url="train-clean-100", download=False)
+    # train_dataset = torchaudio.datasets.LIBRISPEECH(target_dir, url="train-clean-360", download=False)
+    # train_dataset = torchaudio.datasets.LIBRISPEECH(target_dir, url="train-other-500", download=True)
     test_dataset = torchaudio.datasets.LIBRISPEECH(target_dir, url="test-clean", download=False)
     classes = "' abcdefghijklmnopqrstuvwxyz"
 
@@ -194,6 +194,7 @@ if __name__ == "__main__":
     torch.manual_seed(7)
     train_loader = DataLoader(train_dataset, batch_size=train_batch_size,
                               shuffle=True, collate_fn=collate, pin_memory=True)
+
     validation_loader = DataLoader(test_dataset, batch_size=validation_batch_size,
                                    shuffle=False, collate_fn=collate, pin_memory=True)
 

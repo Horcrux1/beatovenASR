@@ -189,8 +189,8 @@ if __name__ == "__main__":
     str_to_num = lambda text: [num_to_char_map[c] for c in text]
     num_to_str = lambda labels: ''.join([char_to_num_map[i] for i in labels])
 
-    train_batch_size = 8
-    validation_batch_size = 8
+    train_batch_size = 64
+    validation_batch_size = 64
     torch.manual_seed(7)
     train_loader = DataLoader(train_dataset, batch_size=train_batch_size,
                               shuffle=True, collate_fn=collate, pin_memory=True)

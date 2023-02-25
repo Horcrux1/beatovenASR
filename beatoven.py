@@ -198,7 +198,8 @@ if __name__ == "__main__":
     validation_loader = DataLoader(test_dataset, batch_size=validation_batch_size,
                                    shuffle=False, collate_fn=collate, pin_memory=True)
 
-    dev = torch.device('cuda:0')
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dev = torch.device(device)
     model = SpeechRecognitionModel(n_cnn_layers=7, n_rnn_layers=5, 
                                rnn_dim=512, n_class=len(classes) + 1, n_feats=128).to(dev)
 

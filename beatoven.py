@@ -5,7 +5,6 @@ warnings.filterwarnings('ignore')
 import librosa
 import librosa.display as display
 import torch
-from wandblogger import *
 import torchaudio
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,11 +18,11 @@ from torchaudio.functional import edit_distance as leven_dist
 from torchmetrics import WordErrorRate 
 
 class ResidualCNN(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel, n_feats, dropout=0.2):
+    def __init__(self, in_channels, out_channels, kernel, n_feats):
         super(ResidualCNN, self).__init__()
         self.norm = nn.LayerNorm(n_feats)
         self.gelu = nn.GELU()
-        self.dropout = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(0.2)
         self.conv = nn.Conv2d(in_channels, out_channels, kernel, padding=kernel // 2)
 
     def forward(self, x):
@@ -32,13 +31,13 @@ class ResidualCNN(nn.Module):
 
 
 class RNN(nn.Module):
-    def __init__(self, rnn_dim, hidden_size, batch_first, dropout=0.2):
+    def __init__(self, rnn_dim, hidden_size, batch_first):
         super(RNN, self).__init__()
         self.norm = nn.LayerNorm(rnn_dim)
         self.gelu = nn.GELU()
         self.gru = nn.GRU(input_size=rnn_dim, hidden_size=hidden_size, num_layers=1,
                           batch_first=batch_first, bidirectional=True)
-        self.dropout = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(0.2)
 
     def forward(self, x):
         x, _ = self.gru(self.gelu(self.norm(x)))
@@ -46,13 +45,13 @@ class RNN(nn.Module):
 
 
 class SpeechRecognitionModel(nn.Module):
-    def __init__(self, kernel_size, kernel_stride, n_res_cnn_layers, res_cnn_dropout, n_rnn_layers, rnn_dim, n_class, n_feats):
+    def __init__(self, n_cnn_layers, n_rnn_layers, rnn_dim, n_class, n_feats):
         super(SpeechRecognitionModel, self).__init__()
         n_feats = n_feats // 2
-        self.cnn = nn.Conv2d(1, 32, kernel_size, stride=kernel_stride, padding=1)
+        self.cnn = nn.Conv2d(1, 32, 3, stride=2, padding=1)
         self.res_cnn = nn.Sequential(*[
-            ResidualCNN(32, 32, kernel=kernel_size, n_feats=n_feats, dropout=res_cnn_dropout)
-            for _ in range(n_res_cnn_layers)
+            ResidualCNN(32, 32, kernel=3, n_feats=n_feats)
+            for _ in range(n_cnn_layers)
         ])
         self.fc = nn.Linear(n_feats * 32, rnn_dim)
         self.rnn = nn.Sequential(*[
@@ -88,6 +87,7 @@ class SpeechRecognitionModel(nn.Module):
                                                          beam_size=25)[0][1])
         return char_list
 
+
 def collate(data):
     spectrograms = [audio_transforms(waveform).squeeze(0).permute(1, 0)
                     for (waveform, _, utterance, _, _, _) in data]
@@ -100,20 +100,13 @@ def collate(data):
     labels = nn.utils.rnn.pad_sequence(labels, batch_first=True)
     return spectrograms, labels, input_lengths, label_lengths
 
-
-def fit(model, epochs, optim, train_data_loader, valid_data_loader):
+# ================================================ TRAINING MODEL =====================================
+def fit(model, epochs, train_data_loader, valid_data_loader):
     best_leven = 1000
-
-    if optim == "adam":
-        optimizer = optim.Adam(model.parameters(), 5e-4)
-    if optim == "sgd":
-        optimizer = optim.SGD(model.parameters(), 5e-4)
-
+    optimizer = optim.AdamW(model.parameters(), 5e-4)
     wer = WordErrorRate()
-
     len_train = len(train_data_loader)
     loss_func = nn.CTCLoss(blank=len(classes)).to(dev)
-
     for i in range(1, epochs + 1):
         # ============================================ TRAINING =======================================
         batch_n = 1
@@ -143,7 +136,6 @@ def fit(model, epochs, optim, train_data_loader, valid_data_loader):
                         len_levenshtein += label_lengths[j]
 
             batch_n += 1
-        wandb.log({"LEVENSHTEIN": train_levenshtein, "epoch": i})
         # ============================================ VALIDATION ======================================
         model.eval()
         with torch.no_grad():
@@ -168,42 +160,12 @@ def fit(model, epochs, optim, train_data_loader, valid_data_loader):
                           val_levenshtein / target_lengths,
                           wer(all_train_actual, all_train_decoded), 
                           wer(all_valid_actual, all_valid_decoded)), end='\n')
-        
         # ============================================ SAVE MODEL ======================================
         if (val_levenshtein / target_lengths) < best_leven:
             torch.save(model.state_dict(), 
-                       f="./logs/" + str((val_levenshtein / target_lengths) * 100).replace('.', '_') + '_' + 'model.pth')
+                       f=str((val_levenshtein / target_lengths) * 100).replace('.', '_') + '_' + 'model.pth')
             best_leven = val_levenshtein / target_lengths
 
-
-def main(config=None):
-    with wandb.init(config=config):
-
-        config = wandb.config
-        print(config)
-        exit()
-        train_batch_size = config.batch_size
-        validation_batch_size = 8
-        torch.manual_seed(7)
-
-        train_loader = DataLoader(train_dataset, batch_size=train_batch_size,
-                                  shuffle=True, collate_fn=collate, pin_memory=True)
-        validation_loader = DataLoader(test_dataset, batch_size=validation_batch_size,
-                                       shuffle=False, collate_fn=collate, pin_memory=True)
-
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        dev = torch.device(device)
-        model = SpeechRecognitionModel(kernel_size=config.kernel_size,
-                                       kernel_stride=config.kernel_stride,
-                                       n_res_cnn_layers=config.n_res_cnn_layers,
-                                       res_cnn_dropout=config.cnn_dropout,
-                                       n_rnn_layers=config.n_rnn_layers, 
-                                       rnn_dim=config.rnn_dim,
-                                       n_class=len(classes) + 1,
-                                       n_feats=128
-                                       ).to(dev)
-
-        fit(model=model, epochs=config.epoch_num, optim=config.optimizer, train_data_loader=train_loader, valid_data_loader=validation_loader)
 
 
 if __name__ == "__main__":
@@ -226,6 +188,21 @@ if __name__ == "__main__":
     str_to_num = lambda text: [num_to_char_map[c] for c in text]
     num_to_str = lambda labels: ''.join([char_to_num_map[i] for i in labels])
 
+    train_batch_size = 8
+    validation_batch_size = 8
 
-    sweep_id = wandb.sweep(sweep_config, project="pytorch-sweeps-demo")
-    wandb.agent(sweep_id=sweep_id, function=main, count=1)
+    torch.manual_seed(7)
+    train_loader = DataLoader(train_dataset, batch_size=train_batch_size,
+                              shuffle=True, collate_fn=collate, pin_memory=True)
+
+    validation_loader = DataLoader(test_dataset, batch_size=validation_batch_size,
+                                   shuffle=False, collate_fn=collate, pin_memory=True)
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dev = torch.device(device)
+    model = SpeechRecognitionModel(n_cnn_layers=7, n_rnn_layers=5, 
+                               rnn_dim=512, n_class=len(classes) + 1, n_feats=128).to(dev)
+
+    summary(model, (1, 128, 1344))
+    print("Training...")
+    fit(model=model, epochs=10, train_data_loader=train_loader, valid_data_loader=validation_loader)

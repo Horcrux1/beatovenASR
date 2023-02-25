@@ -177,11 +177,10 @@ if __name__ == "__main__":
     target_dir = "./data"
     if not os.path.isdir(target_dir):
         os.makedirs(target_dir)
-    train_dataset = torchaudio.datasets.LIBRISPEECH(target_dir, url="train-clean-100", download=False)
+    # train_dataset = torchaudio.datasets.LIBRISPEECH(target_dir, url="train-clean-100", download=False)
     # train_dataset = torchaudio.datasets.LIBRISPEECH(target_dir, url="train-clean-360", download=False)
-    # train_dataset = torchaudio.datasets.LIBRISPEECH(target_dir, url="train-other-500", download=True)
+    train_dataset = torchaudio.datasets.LIBRISPEECH(target_dir, url="train-other-500", download=True)
     test_dataset = torchaudio.datasets.LIBRISPEECH(target_dir, url="test-clean", download=False)
-    classes = "' abcdefghijklmnopqrstuvwxyz"
 
     audio_transforms = torchaudio.transforms.MelSpectrogram()
     num_to_char_map = {c: i for i, c in enumerate(list(classes))}
@@ -191,6 +190,7 @@ if __name__ == "__main__":
 
     train_batch_size = 32
     validation_batch_size = 32
+
     torch.manual_seed(7)
     train_loader = DataLoader(train_dataset, batch_size=train_batch_size,
                               shuffle=True, collate_fn=collate, pin_memory=True)

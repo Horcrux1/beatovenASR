@@ -104,87 +104,75 @@ def collate(data):
     return spectrograms, labels, input_lengths, label_lengths
 
 
-def fit(model, epochs, optim, train_data_loader, valid_data_loader):
-    best_leven = 1000
-
-    if optim == "adam":
-        optimizer = optim.Adam(model.parameters(), 5e-4)
-    if optim == "sgd":
-        optimizer = optim.SGD(model.parameters(), 5e-4)
-
-    wer = WordErrorRate()
+def train(model, optimizer, train_data_loader):
 
     len_train = len(train_data_loader)
     loss_func = nn.CTCLoss(blank=len(classes)).to(dev)
 
-    for i in range(1, epochs + 1):
-        # ============================================ TRAINING =======================================
-        batch_n = 1
-        train_levenshtein = 0
-        len_levenshtein = 0
-        all_train_decoded = []
-        all_train_actual = []
-        for _batch in tqdm(train_data_loader,
-                           position=0, leave=True):
-            model.train()
-            spectrograms, labels, \
-            input_lengths, label_lengths = _batch[0].to(dev), _batch[1].to(dev), _batch[2], _batch[3]
-            optimizer.zero_grad()
-            loss_func(model(spectrograms).log_softmax(2).permute(1, 0, 2),
-                      labels, input_lengths, label_lengths).backward()
-            optimizer.step()
-            # ================================== TRAINING LEVENSHTEIN DISTANCE =========================
-            if batch_n > (len_train - 5):
-                model.eval()
-                with torch.no_grad():
-                    decoded = model.beam_search_with_lm(spectrograms)
-                    for j in range(0, len(decoded)):
-                        actual = num_to_str(labels.cpu().numpy()[j][:label_lengths[j]].tolist())
-                        all_train_decoded.append(decoded[j])
-                        all_train_actual.append(actual)
-                        train_levenshtein += leven_dist(decoded[j], actual)
-                        len_levenshtein += label_lengths[j]
+    batch_n = 1
+    train_levenshtein = 0
+    len_levenshtein = 0
+    all_train_decoded = []
+    all_train_actual = []
 
-            batch_n += 1
-        wandb.log({"LEVENSHTEIN": train_levenshtein, "epoch": i})
-        # ============================================ VALIDATION ======================================
-        model.eval()
-        with torch.no_grad():
-            val_levenshtein = 0
-            target_lengths = 0
-            all_valid_decoded = []
-            all_valid_actual = []
-            for _batch in tqdm(valid_data_loader, position=0, leave=True):
-                spectrograms, labels, \
-                input_lengths, label_lengths = _batch[0].to(dev), _batch[1].to(dev), _batch[2], _batch[3]
+    for _batch in tqdm(train_data_loader, position=0, leave=True):
+        model.train()
+        spectrograms, labels, \
+        input_lengths, label_lengths = _batch[0].to(dev), _batch[1].to(dev), _batch[2], _batch[3]
+        optimizer.zero_grad()
+        loss_func(model(spectrograms).log_softmax(2).permute(1, 0, 2),
+                  labels, input_lengths, label_lengths).backward()
+        optimizer.step()
+        # ================================== TRAINING LEVENSHTEIN DISTANCE =========================
+        if batch_n > (len_train - 5):
+            model.eval()
+            with torch.no_grad():
                 decoded = model.beam_search_with_lm(spectrograms)
                 for j in range(0, len(decoded)):
                     actual = num_to_str(labels.cpu().numpy()[j][:label_lengths[j]].tolist())
-                    all_valid_decoded.append(decoded[j])
-                    all_valid_actual.append(actual)
-                    val_levenshtein += leven_dist(decoded[j], actual)
-                    target_lengths += label_lengths[j]
+                    all_train_decoded.append(decoded[j])
+                    all_train_actual.append(actual)
+                    train_levenshtein += leven_dist(decoded[j], actual)
+                    len_levenshtein += label_lengths[j]
 
-        print('Epoch {}: Training Levenshtein {} | Validation Levenshtein {} '
-              '| Training WER {} | Validation WER {}'
-              .format(i, train_levenshtein / len_levenshtein, 
-                          val_levenshtein / target_lengths,
-                          wer(all_train_actual, all_train_decoded), 
-                          wer(all_valid_actual, all_valid_decoded)), end='\n')
-        
-        # ============================================ SAVE MODEL ======================================
-        if (val_levenshtein / target_lengths) < best_leven:
-            torch.save(model.state_dict(), 
-                       f="./logs/" + str((val_levenshtein / target_lengths) * 100).replace('.', '_') + '_' + 'model.pth')
-            best_leven = val_levenshtein / target_lengths
+        batch_n += 1
+
+    return train_levenshtein, model
+
+def validation(model, valid_data_loader):
+    wer = WordErrorRate()
+
+    model.eval()
+    with torch.no_grad():
+        val_levenshtein = 0
+        target_lengths = 0
+        all_valid_decoded = []
+        all_valid_actual = []
+        for _batch in tqdm(valid_data_loader, position=0, leave=True):
+            spectrograms, labels, \
+            input_lengths, label_lengths = _batch[0].to(dev), _batch[1].to(dev), _batch[2], _batch[3]
+            decoded = model.beam_search_with_lm(spectrograms)
+            for j in range(0, len(decoded)):
+                actual = num_to_str(labels.cpu().numpy()[j][:label_lengths[j]].tolist())
+                all_valid_decoded.append(decoded[j])
+                all_valid_actual.append(actual)
+                val_levenshtein += leven_dist(decoded[j], actual)
+                target_lengths += label_lengths[j]
+
+    print('Epoch {}: Training Levenshtein {} | Validation Levenshtein {} '
+          '| Training WER {} | Validation WER {}'
+          .format(i, train_levenshtein / len_levenshtein, 
+                      val_levenshtein / target_lengths,
+                      wer(all_train_actual, all_train_decoded), 
+                      wer(all_valid_actual, all_valid_decoded)), end='\n')
+    
+    return val_levenshtein, target_lengths
 
 
 def main(config=None):
-    with wandb.init(config=config):
+    with wandb.init(config=config, project="beatovenASR"):
 
         config = wandb.config
-        print(config)
-        exit()
         train_batch_size = config.batch_size
         validation_batch_size = 8
         torch.manual_seed(7)
@@ -194,8 +182,7 @@ def main(config=None):
         validation_loader = DataLoader(test_dataset, batch_size=validation_batch_size,
                                        shuffle=False, collate_fn=collate, pin_memory=True)
 
-        
-        
+
         model = SpeechRecognitionModel(kernel_size=config.kernel_size,
                                        kernel_stride=config.kernel_stride,
                                        n_res_cnn_layers=config.n_res_cnn_layers,
@@ -206,7 +193,22 @@ def main(config=None):
                                        n_feats=128
                                        ).to(dev)
 
-        fit(model=model, epochs=config.epoch_num, optim=config.optimizer, train_data_loader=train_loader, valid_data_loader=validation_loader)
+        if config.optimizer == "adam":
+            optimizer = optim.Adam(model.parameters(), 5e-4)
+        if config.optimizer == "sgd":
+            optimizer = optim.SGD(model.parameters(), 5e-4)
+
+        best_leven = 1000
+        for epoch in range(config.epoch_num + 1):
+            train_loss, trained_model = train(model=model, optimizer = optimizer, train_data_loader=train_loader)
+            val_loss, target_lengths = validation(model= model, valid_data_loader=validation_loader, best_leven=best_leven)
+            # save model 
+            if (val_levenshtein / target_lengths) < best_leven:
+                torch.save(model.state_dict(), 
+                           f="./logs/" + str((val_levenshtein / target_lengths) * 100).replace('.', '_') + '_' + 'model.pth')
+                best_leven = val_levenshtein / target_lengths
+            # log wandb 
+            wandb.log({"LEVENSHTEIN": train_loss, "epoch": epoch})   
 
 
 if __name__ == "__main__":
@@ -229,6 +231,7 @@ if __name__ == "__main__":
     str_to_num = lambda text: [num_to_char_map[c] for c in text]
     num_to_str = lambda labels: ''.join([char_to_num_map[i] for i in labels])
 
-
-    sweep_id = wandb.sweep(sweep_config, project="pytorch-sweeps-demo")
-    wandb.agent(sweep_id=sweep_id, function=main, count=1)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dev = torch.device(device)
+    sweep_id = wandb.sweep(sweep_config, project="beatovenASR")
+    wandb.agent(sweep_id=sweep_id, function=main, count=5)

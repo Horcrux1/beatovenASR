@@ -18,6 +18,9 @@ from ds_ctcdecoder import Alphabet, ctc_beam_search_decoder, Scorer
 from torchaudio.functional import edit_distance as leven_dist
 from torchmetrics import WordErrorRate 
 
+device = "cuda" if torch.cuda.is_available() else "cpu"
+dev = torch.device(device)
+
 class ResidualCNN(nn.Module):
     def __init__(self, in_channels, out_channels, kernel, n_feats, dropout=0.2):
         super(ResidualCNN, self).__init__()
@@ -179,7 +182,7 @@ def main(config=None):
         validation_loader = DataLoader(test_dataset, batch_size=validation_batch_size,
                                        shuffle=False, collate_fn=collate, pin_memory=True)
 
- 
+
         model = SpeechRecognitionModel(kernel_size=config.kernel_size,
                                        kernel_stride=config.kernel_stride,
                                        n_res_cnn_layers=config.n_res_cnn_layers,

@@ -19,6 +19,7 @@ from torchaudio.functional import edit_distance as leven_dist
 from torchmetrics import WordErrorRate 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
+dev = torch.device(device)
 
 class ResidualCNN(nn.Module):
     def __init__(self, in_channels, out_channels, kernel, n_feats, dropout=0.2):
@@ -194,7 +195,7 @@ def main(config=None):
                                        shuffle=False, collate_fn=collate, pin_memory=True)
 
         
-        dev = torch.device(device)
+        
         model = SpeechRecognitionModel(kernel_size=config.kernel_size,
                                        kernel_stride=config.kernel_stride,
                                        n_res_cnn_layers=config.n_res_cnn_layers,
